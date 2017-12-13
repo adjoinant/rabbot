@@ -315,12 +315,8 @@ Broker.prototype.publish = function( exchangeName, type, message, routingKey, co
 		}.bind( this ) );
 };
 
-Broker.prototype.request = function( exchangeName, options, notify, connectionName ) {
-  if( _.isFunction( notify ) ) {
-    connectionName = connectionName || options.connectionName || 'default';
-  } else {
-    connectionName = notify || options.connectionName || 'default';
-  }
+Broker.prototype.request = function( exchangeName, options, connectionName ) {
+  connectionName = connectionName || options.connectionName || 'default';
 	var requestId = uuid.v1();
 	options.messageId = requestId;
 	options.connectionName = connectionName;
@@ -335,13 +331,38 @@ Broker.prototype.request = function( exchangeName, options, notify, connectionNa
 			reject( new Error( "No reply received within the configured timeout of " + replyTimeout + " ms" ) );
 		}, replyTimeout );
 		var subscription = responses.subscribe( requestId, function( message ) {
-			if ( message.properties.headers[ "sequence_end" ] ) { // jshint ignore:line
-				clearTimeout( timeout );
-				resolve( message );
-				subscription.unsubscribe();
-			} else if( notify ) {
-				notify( message );
-			}
+			clearTimeout( timeout );
+      resolve( message );
+      subscription.unsubscribe();
+		} );
+		this.publish( exchangeName, options );
+
+	}.bind( this ) );
+};
+
+Broker.prototype.scatterGather = function( exchangeName, options, connectionName ) {
+  connectionName = connectionName || options.connectionName || 'default';
+	var requestId = uuid.v1();
+	options.messageId = requestId;
+	options.connectionName = connectionName;
+	var connection = this.connections[ connectionName ].options;
+	var exchange = this.getExchange( exchangeName, connectionName );
+	var publishTimeout = options.timeout || exchange.publishTimeout || connection.publishTimeout || 500;
+	var replyTimeout = options.replyTimeout || exchange.replyTimeout || connection.replyTimeout || ( publishTimeout * 2 );
+  var replyCount = options.replyCount || Number.MAX_SAFE_INTEGER;
+  var replies = [];
+	return when.promise( function( resolve, reject ) {
+		var timeout = setTimeout( function() {
+      resolve( replies );
+      subscription.unsubscribe();
+		}, replyTimeout );
+		var subscription = responses.subscribe( requestId, function( message ) {
+      replies.push(message);
+      if (--replyCount === 0) {
+        clearTimeout( timeout );
+        resolve( replies );
+        subscription.unsubscribe();
+      }
 		} );
 		this.publish( exchangeName, options );
 
